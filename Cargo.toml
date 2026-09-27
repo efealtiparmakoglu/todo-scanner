@@ -1,0 +1,9 @@
+[package]
+name = "todo-scanner"
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+description = "Scans source trees for TODO/FIXME/HACK comments and reports them with file/line info"
+[[bin]]
+name = "todo-scanner"
+path = "src/main.rs"
