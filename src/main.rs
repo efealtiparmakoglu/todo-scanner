@@ -40,3 +40,105 @@ fn scan(dir: &PathBuf, items: &mut Vec<Item>) {
 }
 
 use std::process::ExitCode;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Build a throwaway tree of source files and scan it.
+    fn fixture(files: &[(&str, &str)]) -> (PathBuf, Vec<Item>) {
+        let root = std::env::temp_dir().join(format!(
+            "todo-scanner-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        for (name, content) in files {
+            let path = root.join(name);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, content).unwrap();
+        }
+        let mut items = Vec::new();
+        scan(&root, &mut items);
+        let _ = fs::remove_dir_all(&root);
+        (root, items)
+    }
+
+    #[test]
+    fn finds_every_tag() {
+        let (_, items) = fixture(&[
+            ("a.rs", "// TODO: write the docs\n"),
+            ("b.py", "# FIXME: this crashes\n"),
+            ("c.js", "// HACK: temporary\n"),
+            ("d.go", "// XXX: revisit\n"),
+        ]);
+        let mut tags: Vec<String> = items.iter().map(|item| item.2.clone()).collect();
+        tags.sort();
+        assert_eq!(tags, vec!["FIXME", "HACK", "TODO", "XXX"]);
+        assert_eq!(items.len(), 4);
+    }
+
+    #[test]
+    fn reports_line_numbers_and_text() {
+        let (_, items) = fixture(&[("a.rs", "fn main() {}\n// TODO: fix this\n")]);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].1, 2, "the marker is on line 2");
+        assert!(items[0].3.contains("fix this"), "text: {}", items[0].3);
+    }
+
+    #[test]
+    fn one_tag_per_line() {
+        // a line mentioning two tags is reported once
+        let (_, items) = fixture(&[("a.rs", "// TODO: this is really a FIXME\n")]);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].2, "TODO");
+    }
+
+    #[test]
+    fn descends_into_subdirectories() {
+        let (_, items) = fixture(&[("deep/nested/a.rs", "// TODO: below\n")]);
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn ignores_noise_directories() {
+        let (_, items) = fixture(&[
+            ("src/a.rs", "// TODO: real\n"),
+            ("target/b.rs", "// TODO: build artifact\n"),
+            ("node_modules/c.rs", "// TODO: dependency\n"),
+            (".git/d.rs", "// TODO: internal\n"),
+        ]);
+        assert_eq!(items.len(), 1, "only the source tree counts: {:?}", items);
+    }
+
+    #[test]
+    fn ignores_unrelated_extensions() {
+        let (_, items) = fixture(&[
+            ("notes.md", "TODO: not source\n"),
+            ("data.json", "{\"todo\": true}\n"),
+        ]);
+        assert!(items.is_empty(), "got {:?}", items);
+    }
+
+    #[test]
+    fn clean_tree_yields_nothing() {
+        let (_, items) = fixture(&[("a.rs", "fn main() { println!(\"hi\"); }\n")]);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn missing_directory_is_silent() {
+        let mut items = Vec::new();
+        scan(&PathBuf::from("/definitely/not/here"), &mut items);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn reads_nested_directories_recursively() {
+        let (_, items) = fixture(&[("a.rs", "// TODO: one\n"), ("sub/b.c", "// TODO: two\n")]);
+        assert_eq!(items.len(), 2);
+    }
+}
